@@ -33,7 +33,6 @@ func main() {
 	}
 	defer conn.Close()
 
-	redisClient := db.ConnectToRedis(utils.GetConfig().RedisAddr)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -45,7 +44,7 @@ func main() {
 	app := fiber.New()
 	app.Use(logger.New())
 	app.Use(cors.New())
-	router.Routes(app, dbClient, redisClient, qConn)
+	router.Routes(app, dbClient, qConn)
 	db.Migrate(dbClient)
 
 	app.Use(func(c *fiber.Ctx) error {

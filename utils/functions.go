@@ -9,6 +9,7 @@ import (
 
 	"github.com/golang-jwt/jwt"
 	"github.com/rabbitmq/amqp091-go"
+	"github.com/showbaba/go-auth-service/models"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -119,4 +120,10 @@ func ValidateAuthToken(signedToken, SECRET_KEY string) (*AuthTokenJwtClaim, erro
 		return nil, err
 	}
 	return claims, nil
+}
+
+func IsTokenValid(token models.Token) bool {
+	currentTime := time.Now()
+	duration := currentTime.Sub(token.CreatedAt)
+	return duration <= 30*time.Minute
 }

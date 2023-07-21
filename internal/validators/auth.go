@@ -30,6 +30,17 @@ func ValidateLogin(c *fiber.Ctx) error {
 	return c.Next()
 }
 
+func ValidateResendOTP(c *fiber.Ctx) error {
+	body := new(helpers.ResendOTPInput)
+	c.BodyParser(&body)
+
+	err := Validator.Struct(body)
+	if err != nil {
+		return helpers.SchemaError(c, err)
+	}
+	return c.Next()
+}
+
 func ValidateVerifyEmail(c *fiber.Ctx) error {
 	body := new(helpers.VerifyEmailInput)
 	c.BodyParser(&body)

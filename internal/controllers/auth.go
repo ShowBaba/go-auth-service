@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
-	"time"
 
-	"github.com/go-redis/redis/v8"
 	"github.com/gofiber/fiber/v2"
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/showbaba/go-auth-service/internal/helpers"
@@ -25,18 +24,19 @@ var ctx = context.Background()
 
 type AuthController struct {
 	database        *gorm.DB
-	redisClient     *redis.Client
 	queueConnection *amqp091.Connection
 	userRepository  *repository.UserRepository
+	tokenRepository *repository.TokenRepository
 }
 
-func NewAuthController(db *gorm.DB, redis *redis.Client, qC *amqp091.Connection,
+func NewAuthController(db *gorm.DB, qC *amqp091.Connection,
+	tokenRepository *repository.TokenRepository,
 	userRepository *repository.UserRepository) *AuthController {
 	return &AuthController{
 		database:        db,
-		redisClient:     redis,
 		queueConnection: qC,
 		userRepository:  userRepository,
+		tokenRepository: tokenRepository,
 	}
 }
 
@@ -69,6 +69,13 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 	if err != nil {
 		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"status": "fail", "message": err.Error()})
 	}
+	otp, err := helpers.GenerateRandomNumber(10000, 99999)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(
+			&fiber.Map{"message": fmt.Sprint(err)})
+	}
+
+	fmt.Println("otp value", otp)
 
 	newUser := models.User{
 		FirstName:   input.FirstName,
@@ -84,16 +91,7 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
 		return c.Status(http.StatusInternalServerError).JSON(
 			&fiber.Map{"message": fmt.Sprint(err)})
 	}
-
-	otp, err := helpers.GenerateRandomNumber(10000, 99999)
-	if err != nil {
-		return c.Status(http.StatusInternalServerError).JSON(
-			&fiber.Map{"message": fmt.Sprint(err)})
-	}
-
-	// store otp in redis cache
-	fmt.Println("otp value", otp)
-	err = a.redisClient.Set(ctx, user.Email, otp, 30*time.Minute).Err()
+	_, err = a.tokenRepository.Create(&models.Token{UserID: user.ID, Token: otp})
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(
 			&fiber.Map{"message": fmt.Sprint(err)})
@@ -110,6 +108,8 @@ func (a *AuthController) Signup(c *fiber.Ctx) error {
                 <p style="font-size: 1.1em;">Hi,</p>
                 <p>Hi ` + input.FirstName + `</p>
                 <p>Welcome to Go-Auth-Service</p>
+                <p>Use the OTP below to verify your account</p>
+                <p>` + strconv.Itoa(otp) + `</p>
                 <p style="font-size: 0.9em;">
                     Regards,<br />
                     Go-Auth-Service
@@ -160,15 +160,35 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 		}
 	}
 
-	val, err := a.redisClient.Get(ctx, input.Email).Bytes()
+	tokenCondition := models.Token{UserID: user.ID, Token: input.OTP}
+	token, exist, err := a.tokenRepository.Fetch(tokenCondition)
 	if err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(
 			&fiber.Map{"message": fmt.Sprint(err)})
 	}
 
-	if val == nil || string(val) == "" {
-		return c.Status(http.StatusUnauthorized).JSON(
-			&fiber.Map{"message": "invalid credentials"})
+	if !exist {
+		if err != nil {
+			return c.Status(http.StatusNotFound).JSON(
+				&fiber.Map{"message": "invalid otp"})
+		}
+	}
+
+	if token == nil {
+		return c.Status(http.StatusBadRequest).JSON(
+			&fiber.Map{"message": "invalid token"})
+	}
+
+	if token.Token == 0 {
+		return c.Status(http.StatusBadRequest).JSON(
+			&fiber.Map{"message": "invalid token"})
+	}
+
+	valid := utils.IsTokenValid(*token)
+
+	if !valid {
+		return c.Status(http.StatusBadRequest).JSON(
+			&fiber.Map{"message": "token already expired"})
 	}
 
 	err = a.userRepository.Update(user.ID, models.User{IsVerified: utils.BoolPointer(true)})
@@ -182,19 +202,101 @@ func (a *AuthController) VerifyEmail(c *fiber.Ctx) error {
 			&fiber.Map{"message": fmt.Sprint(err)})
 	}
 
-	token, err := utils.GenerateToken(utils.GetConfig().JWTSecretKey, input.Email, user.ID)
+	jwtToken, err := utils.GenerateToken(utils.GetConfig().JWTSecretKey, input.Email, user.ID)
 	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(
+			&fiber.Map{"message": fmt.Sprint(err)})
+	}
+	if err = a.tokenRepository.Delete(&tokenCondition); err != nil {
 		return c.Status(http.StatusInternalServerError).JSON(
 			&fiber.Map{"message": fmt.Sprint(err)})
 	}
 	c.Status(200)
 	return c.JSON(&fiber.Map{
 		"success": true,
-		"message": "emai verified successful",
-		"token":   token,
+		"message": "email verified successful",
+		"token":   jwtToken,
 	})
 }
 
+func (a *AuthController) ResendOTP(c *fiber.Ctx) error {
+	c.Set("Access-Control-Allow-Origin", "*")
+
+	var input helpers.ResendOTPInput
+	if err := c.BodyParser(&input); err != nil {
+		log.Error("failed to parse request body", zap.Error(err))
+		return c.Status(http.StatusInternalServerError).JSON(
+			&fiber.Map{"message": fmt.Sprintf(`"failed to parse request body: %v`, err)})
+	}
+
+	user, exist, err := a.userRepository.Fetch(models.User{Email: input.Email})
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(
+			&fiber.Map{"message": fmt.Sprint(err)})
+	}
+
+	if !exist {
+		if err != nil {
+			return c.Status(http.StatusNotFound).JSON(
+				&fiber.Map{"message": "user with email not found"})
+		}
+	}
+
+	if err = a.tokenRepository.Delete(&models.Token{UserID: user.ID}); err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(
+			&fiber.Map{"message": fmt.Sprint(err)})
+	}
+
+	otp, err := helpers.GenerateRandomNumber(10000, 99999)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(
+			&fiber.Map{"message": fmt.Sprint(err)})
+	}
+
+	fmt.Println("otp value", otp)
+	_, err = a.tokenRepository.Create(&models.Token{UserID: user.ID, Token: otp})
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(
+			&fiber.Map{"message": fmt.Sprint(err)})
+	}
+
+	mail := utils.Mail{
+		Sender:  utils.MAIL_USERNAME,
+		Subject: "Verify Email OTP!",
+		To:      []string{input.Email},
+		Body: `<div style="font-family: Helvetica, Arial, sans-serif; min-width: 1000px; overflow: auto; line-height: 2;">
+            <div style="margin: 50px auto; width: 70%; padding: 20px 0;">
+                <div style="border-bottom: 1px solid #eee;"><a href="google.com" style="font-size: 1.4em; color: #00466a; text-decoration: none; font-weight: 600;">Go-Auth-Service</a></div>
+                <p style="font-size: 1.1em;">Hi,</p>
+                <p>Hi ` + user.FirstName + `</p>
+                <p>Use the OTP below to verify your account</p>
+                <p>` + strconv.Itoa(otp) + `</p>
+                <p style="font-size: 0.9em;">
+                    Regards,<br />
+                    Go-Auth-Service
+                </p>
+                <hr style="border: none; border-top: 1px solid #eee;" />
+            </div>
+        </div>`,
+	}
+	payload, err := json.Marshal(mail)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(
+			&fiber.Map{"message": fmt.Sprint(err)})
+	}
+	if err := utils.PublishMessageToQueue(ctx, a.queueConnection, payload, utils.NOTIFICATION_QUEUE); err != nil {
+		if err != nil {
+			return c.Status(http.StatusInternalServerError).JSON(
+				&fiber.Map{"message": fmt.Sprint(err)})
+		}
+	}
+
+	c.Status(200)
+	return c.JSON(&fiber.Map{
+		"success": true,
+		"message": "otp sent successful",
+	})
+}
 
 func (a *AuthController) Login(c *fiber.Ctx) error {
 	c.Set("Access-Control-Allow-Origin", "*")

@@ -18,10 +18,11 @@ func NewUserRepository(db *gorm.DB) *UserRepository {
 }
 
 func (a *UserRepository) Create(data *models.User) (*models.User, error) {
-	if err := a.database.Create(data).Error; err != nil {
+	var user *models.User = &models.User{}
+	if err := a.database.Create(data).First(user).Error; err != nil {
 		return nil, err
 	}
-	return data, nil
+	return user, nil
 }
 
 func (a *UserRepository) Update(id uint, updates models.User) error {

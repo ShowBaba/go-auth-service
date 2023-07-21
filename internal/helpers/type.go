@@ -11,7 +11,11 @@ type SignUpInput struct {
 
 type VerifyEmailInput struct {
 	Email string `json:"email" validate:"required"`
-	OTP   string `json:"otp" validate:"required"`
+	OTP   int `json:"otp" validate:"required"`
+}
+
+type ResendOTPInput struct {
+	Email string `json:"email" validate:"required"`
 }
 
 type LoginInput struct {

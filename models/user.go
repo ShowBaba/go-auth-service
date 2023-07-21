@@ -8,17 +8,17 @@ import (
 )
 
 type User struct {
-	ID             uint `gorm:"primaryKey"`
-	Email          string
-	FirstName      string
-	LastName       string
-	Password       string
-	PhoneNumber    string
-	Username       string
-	ProfilePicture string
-	IsVerified     *bool     `gorm:"default:false"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID                uint `gorm:"primaryKey"`
+	Email             string
+	FirstName         string
+	LastName          string
+	Password          string
+	PhoneNumber       string
+	Username          string
+	ProfilePicture    string
+	IsVerified        *bool `gorm:"default:false"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 func (u *User) Insert(db *gorm.DB) (uint, error) {
@@ -56,7 +56,6 @@ type UserWithoutPassword struct {
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
 }
-
 
 func RemovePasswordFromUser(u *User) *UserWithoutPassword {
 	userWithoutPassword := UserWithoutPassword{
