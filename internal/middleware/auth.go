@@ -41,6 +41,8 @@ func (m *AuthMiddleware) ValidateAuthHeaderToken(c *fiber.Ctx) error {
 				"message": fmt.Sprintf("error validating auth token token: %v", err),
 			})
 	}
+
+	// TODO: fetch user and confirm if email has been validated
 	c.Set("email", claim.Email)
 	c.Set("id", strconv.FormatUint(uint64(claim.ID), 10))
 	return c.Next()
