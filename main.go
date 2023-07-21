@@ -53,4 +53,5 @@ func main() {
 	port := utils.GetConfig().Port
 	log.Printf("starting server on port: %s", port)
 	app.Listen(port)
+	wg.Wait()
 }
